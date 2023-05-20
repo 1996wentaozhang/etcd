@@ -84,13 +84,12 @@ type raftNode struct {
 
 	// a chan to send out apply
 	applyc chan toApply
-
-	// a chan to send out readState
+	// 发送readState
 	readStateC chan raft.ReadState
 
 	// utility
 	ticker *time.Ticker
-	// contention detectors for raft heartbeat message
+	// 检测leader的心跳
 	td *contention.TimeoutDetector
 
 	stopped chan struct{}
@@ -102,10 +101,14 @@ type raftNodeConfig struct {
 
 	// to check if msg receiver is removed from cluster
 	isIDRemoved func(id uint64) bool
+	// raft实现
 	raft.Node
+	// 内存后端
 	raftStorage *raft.MemoryStorage
-	storage     serverstorage.Storage
-	heartbeat   time.Duration // for logging
+	// 硬盘后端
+	storage   serverstorage.Storage
+	heartbeat time.Duration // for logging
+	// 与member进行消息互通
 	// transport specifies the transport to send and receive msgs to members.
 	// Sending messages MUST NOT block. It is okay to drop messages, since
 	// clients should timeout and reissue their messages.
@@ -114,6 +117,7 @@ type raftNodeConfig struct {
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
+	// 代码日志
 	var lg raft.Logger
 	if cfg.lg != nil {
 		lg = NewRaftLoggerZap(cfg.lg)
@@ -126,6 +130,7 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 		}
 	}
 	raft.SetLogger(lg)
+	//
 	r := &raftNode{
 		lg:             cfg.lg,
 		tickMu:         new(sync.Mutex),
@@ -168,7 +173,11 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 			case <-r.ticker.C:
 				r.tick()
 			case rd := <-r.Ready():
+				// 读取到当前最新的状态
+
+				// softState[leadrID,当前节点的角色]
 				if rd.SoftState != nil {
+					// 是否为新的leader
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 					if newLeader {
 						leaderChanges.Inc()
@@ -180,20 +189,25 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						hasLeader.Set(1)
 					}
 
+					// 调用server接口
 					rh.updateLead(rd.SoftState.Lead)
+					// 自己是否为leader
 					islead = rd.RaftState == raft.StateLeader
 					if islead {
 						isLeader.Set(1)
 					} else {
 						isLeader.Set(0)
 					}
+					// 调用server接口
 					rh.updateLeadership(newLeader)
 					r.td.Reset()
 				}
 
+				// MsgReadIndex消息的响应
 				if len(rd.ReadStates) != 0 {
 					select {
 					case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
+						// 发生最新一条到chan
 					case <-time.After(internalTimeout):
 						r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeout))
 					case <-r.stopped:
@@ -201,29 +215,34 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					}
 				}
 
+				// ------------------
 				notifyc := make(chan struct{}, 1)
 				ap := toApply{
 					entries:  rd.CommittedEntries,
 					snapshot: rd.Snapshot,
 					notifyc:  notifyc,
 				}
-
+				// 调用server接口,更新CommittedIndex
 				updateCommittedIndex(&ap, rh)
 
+				// 发生要apply的数据给server
 				select {
 				case r.applyc <- ap:
 				case <-r.stopped:
 					return
 				}
 
+				//
 				// the leader can write to its disk in parallel with replicating to the followers and them
 				// writing to their disks.
 				// For more details, check raft thesis 10.2.1
+				// lead[1.写入硬盘][2.向follewers发送]同时进行
 				if islead {
-					// gofail: var raftBeforeLeaderSend struct{}
+					// 发送消息
 					r.transport.Send(r.processMessages(rd.Messages))
 				}
 
+				// 向硬盘后端保存snapshot
 				// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
 				// ensure that recovery after a snapshot restore is possible.
 				if !raft.IsEmptySnap(rd.Snapshot) {
@@ -234,10 +253,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// gofail: var raftAfterSaveSnap struct{}
 				}
 
+				// 向硬盘后端 保存Entries和状态
 				// gofail: var raftBeforeSave struct{}
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 				}
+				// prometheus指标
 				if !raft.IsEmptyHardState(rd.HardState) {
 					proposalsCommitted.Set(float64(rd.HardState.Commit))
 				}
@@ -248,24 +269,28 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// old data from the WAL. Otherwise could get an error like:
 					// panic: tocommit(107) is out of range [lastIndex(84)]. Was the raft log corrupted, truncated, or lost?
 					// See https://github.com/etcd-io/etcd/issues/10219 for more details.
+					// 触发硬盘后端，强制写入硬盘
 					if err := r.storage.Sync(); err != nil {
 						r.lg.Fatal("failed to sync Raft snapshot", zap.Error(err))
 					}
 
-					// etcdserver now claim the snapshot has been persisted onto the disk
+					// 通知快照已经存入硬盘
 					notifyc <- struct{}{}
 
+					// 内存后端应用快照
 					// gofail: var raftBeforeApplySnap struct{}
 					r.raftStorage.ApplySnapshot(rd.Snapshot)
 					r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
 					// gofail: var raftAfterApplySnap struct{}
 
+					// 释放快照之前的wal
 					if err := r.storage.Release(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to release Raft wal", zap.Error(err))
 					}
 					// gofail: var raftAfterWALRelease struct{}
 				}
 
+				// 内存后端应用Entries
 				r.raftStorage.Append(rd.Entries)
 
 				if !islead {
@@ -283,12 +308,15 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// We simply wait for ALL pending entries to be applied for now.
 					// We might improve this later on if it causes unnecessary long blocking issues.
 					waitApply := false
+					// 可以提交的entity
+					// 如果有配置变化
 					for _, ent := range rd.CommittedEntries {
 						if ent.Type == raftpb.EntryConfChange {
 							waitApply = true
 							break
 						}
 					}
+					// 等待配置应用
 					if waitApply {
 						// blocks until 'applyAll' calls 'applyWait.Trigger'
 						// to be in sync with scheduled config-change job
@@ -299,7 +327,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 							return
 						}
 					}
-
+					// 发送消息
 					// gofail: var raftBeforeFollowerSend struct{}
 					r.transport.Send(msgs)
 				} else {

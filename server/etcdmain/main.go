@@ -23,8 +23,10 @@ import (
 )
 
 func Main(args []string) {
+	// 检查架构是否支持
 	checkSupportArch()
 
+	// etcd 子命令:gateway/grpc-proxy
 	if len(args) > 1 {
 		cmd := args[1]
 		switch cmd {
@@ -36,7 +38,7 @@ func Main(args []string) {
 			return
 		}
 	}
-
+	// etcd/etcd v2的proxy
 	startEtcdOrProxyV2(args)
 }
 

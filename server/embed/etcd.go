@@ -68,19 +68,22 @@ const (
 
 // Etcd contains a running etcd server and its listeners.
 type Etcd struct {
-	Peers   []*peerListener
+	// 针对peer的Listener
+	Peers []*peerListener
+	// 针对客户端的Listener[sctxs中的每个Listener都会记录在这里]
 	Clients []net.Listener
-	// a map of contexts for the servers that serves client requests.
+	// [监听地址]serveCtx
 	sctxs            map[string]*serveCtx
 	metricsListeners []net.Listener
 
 	tracingExporterShutdown func()
-
+	// etcd server
 	Server *etcdserver.EtcdServer
-
+	// 配置文件
 	cfg   Config
 	stopc chan struct{}
-	errc  chan error
+	// buffer channel
+	errc chan error
 
 	closeOnce sync.Once
 }
@@ -95,6 +98,7 @@ type peerListener struct {
 // The returned Etcd.Server is not guaranteed to have joined the cluster. Wait
 // on the Etcd.Server.ReadyNotify() channel to know when it completes and is ready for use.
 func StartEtcd(inCfg *Config) (e *Etcd, err error) {
+	// 校验Config
 	if err = inCfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -134,6 +138,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		"configuring client listeners",
 		zap.Strings("listen-client-urls", e.cfg.getListenClientUrls()),
 	)
+	// ClientListeners
 	if e.sctxs, err = configureClientListeners(cfg); err != nil {
 		return e, err
 	}
@@ -247,6 +252,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
 
+	// ------------ ETCD server -------------
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
 		return e, err
 	}
@@ -267,6 +273,8 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			return e, err
 		}
 	}
+
+	// 启动etcd server
 	e.Server.Start()
 
 	if err = e.servePeers(); err != nil {
@@ -625,8 +633,9 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 	if cfg.EnablePprof {
 		cfg.logger.Info("pprof is enabled", zap.String("path", debugutil.HTTPPrefixPProf))
 	}
-
+	// ----- 为1)--listen-client-urls 2)--listen-client-http-urls 定义的监听地址创建serveCtx
 	sctxs = make(map[string]*serveCtx)
+	// 参数检查
 	for _, u := range append(cfg.ListenClientUrls, cfg.ListenClientHttpUrls...) {
 		if u.Scheme == "http" || u.Scheme == "unix" {
 			if !cfg.ClientTLSInfo.Empty() {
@@ -640,7 +649,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 			return nil, fmt.Errorf("TLS key/cert (--cert-file, --key-file) must be provided for client url %s with HTTPS scheme", u.String())
 		}
 	}
-
+	// 创建serveCtx
 	for _, u := range cfg.ListenClientUrls {
 		addr, secure, network := resolveUrl(u)
 		sctx := sctxs[addr]
@@ -671,8 +680,9 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 		sctx.network = network
 		sctx.httpOnly = true
 	}
-
+	//
 	for _, sctx := range sctxs {
+		// 为serveCtx设置Listener
 		if sctx.l, err = transport.NewListenerWithOpts(sctx.addr, sctx.scheme,
 			transport.WithSocketOpts(&cfg.SocketOpts),
 			transport.WithSkipTLSInfoCheck(true),
@@ -682,6 +692,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 		// net.Listener will rewrite ipv4 0.0.0.0 to ipv6 [::], breaking
 		// hosts that disable ipv6. So, use the address given by the user.
 
+		// file descriptor限制
 		if fdLimit, fderr := runtimeutil.FDLimit(); fderr == nil {
 			if fdLimit <= reservedInternalFDNum {
 				cfg.logger.Fatal(
@@ -704,13 +715,18 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 				zap.Error(err),
 			)
 		}(sctx)
+		// 仅将ETCD整合进去其他APP时,才使用
 		for k := range cfg.UserHandlers {
 			sctx.userHandlers[k] = cfg.UserHandlers[k]
 		}
+		// 仅将ETCD整合进去其他APP时,才使用
 		sctx.serviceRegister = cfg.ServiceRegister
+		// 启动Pprof
 		if cfg.EnablePprof || cfg.LogLevel == "debug" {
+			// 注册Pprof相关路径对应的handler
 			sctx.registerPprof()
 		}
+		// 启动Trace
 		if cfg.LogLevel == "debug" {
 			sctx.registerTrace()
 		}

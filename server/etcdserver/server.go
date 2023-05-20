@@ -209,14 +209,18 @@ type Server interface {
 // EtcdServer is the production implementation of the Server interface
 type EtcdServer struct {
 	// inflightSnapshots holds count the number of snapshots currently inflight.
-	inflightSnapshots int64  // must use atomic operations to access; keep 64-bit aligned.
-	appliedIndex      uint64 // must use atomic operations to access; keep 64-bit aligned.
-	committedIndex    uint64 // must use atomic operations to access; keep 64-bit aligned.
-	term              uint64 // must use atomic operations to access; keep 64-bit aligned.
-	lead              uint64 // must use atomic operations to access; keep 64-bit aligned.
-
+	inflightSnapshots int64  // 当前正在执行的snapshots数量
+	appliedIndex      uint64 // 当前已应用的index(保存数据至后端存储)
+	committedIndex    uint64 // 当前已提交的index
+	term              uint64 // 任期序号
+	lead              uint64 // 当前leader ID
+	// 用于操作consistIndex的接口
+	// 	保证了etcd写操作的幂等性
+	// 	每次实际执行apply操作后，etcd都会更新consistentIndex为当前apply数据的Index
 	consistIndex cindex.ConsistentIndexer // consistIndex is used to get/set/save consistentIndex
-	r            raftNode                 // uses 64-bit atomics; keep 64-bit aligned.
+
+	// raftNode
+	r raftNode // uses 64-bit atomics; keep 64-bit aligned.
 
 	readych chan struct{}
 	Cfg     config.ServerConfig
@@ -230,8 +234,7 @@ type EtcdServer struct {
 	// read routine notifies etcd server that it waits for reading by sending an empty struct to
 	// readwaitC
 	readwaitc chan struct{}
-	// readNotifier is used to notify the read routine that it can process the request
-	// when there is no error
+	// 用于通知读协程,可以处理请求了
 	readNotifier *notifier
 
 	// stop signals the run goroutine should shutdown.
@@ -297,7 +300,8 @@ type EtcdServer struct {
 	*AccessController
 	// forceSnapshot can force snapshot be triggered after apply, independent of the snapshotCount.
 	// Should only be set within apply code path. Used to force snapshot after cluster version downgrade.
-	forceSnapshot     bool
+	forceSnapshot bool
+	// 提供数据检查的接口
 	corruptionChecker CorruptionChecker
 }
 
@@ -526,15 +530,19 @@ func (s *EtcdServer) adjustTicks() {
 // should be implemented in goroutines.
 func (s *EtcdServer) Start() {
 	s.start()
+	//
 	s.GoAttach(func() { s.adjustTicks() })
 	s.GoAttach(func() { s.publishV3(s.Cfg.ReqTimeout()) })
 	s.GoAttach(s.purgeFile)
 	s.GoAttach(func() { monitorFileDescriptor(s.Logger(), s.stopping) })
 	s.GoAttach(s.monitorClusterVersions)
 	s.GoAttach(s.monitorStorageVersion)
+	// 线性化读
 	s.GoAttach(s.linearizableReadLoop)
+	//
 	s.GoAttach(s.monitorKVHash)
 	s.GoAttach(s.monitorCompactHash)
+	// 监听服务器版本
 	s.GoAttach(s.monitorDowngrade)
 }
 
@@ -543,7 +551,7 @@ func (s *EtcdServer) Start() {
 // This function is just used for testing.
 func (s *EtcdServer) start() {
 	lg := s.Logger()
-
+	// 设置SnapshotCount默认值为10000
 	if s.Cfg.SnapshotCount == 0 {
 		lg.Info(
 			"updating snapshot-count to default",
@@ -552,6 +560,7 @@ func (s *EtcdServer) start() {
 		)
 		s.Cfg.SnapshotCount = DefaultSnapshotCount
 	}
+	//
 	if s.Cfg.SnapshotCatchUpEntries == 0 {
 		lg.Info(
 			"updating snapshot catch-up entries to default",
@@ -570,6 +579,7 @@ func (s *EtcdServer) start() {
 	s.readwaitc = make(chan struct{}, 1)
 	s.readNotifier = newNotifier()
 	s.leaderChanged = notify.NewNotifier()
+	// 集群版本
 	if s.ClusterVersion() != nil {
 		lg.Info(
 			"starting etcd server",
@@ -766,6 +776,7 @@ func (s *EtcdServer) run() {
 		smu.RUnlock()
 		return
 	}
+	// server提供给raftNode调用的接口
 	rh := &raftReadyHandler{
 		getLead:    func() (lead uint64) { return s.getLead() },
 		updateLead: func(lead uint64) { s.setLead(lead) },
@@ -844,9 +855,11 @@ func (s *EtcdServer) run() {
 	for {
 		select {
 		case ap := <-s.r.apply():
+			// 开始应用提交
 			f := schedule.NewJob("server_applyAll", func(context.Context) { s.applyAll(&ep, &ap) })
 			sched.Schedule(f)
 		case leases := <-expiredLeaseC:
+			//  清理过期的租约
 			s.revokeExpiredLeases(leases)
 		case err := <-s.errorc:
 			lg.Warn("server error", zap.Error(err))
@@ -919,8 +932,11 @@ func (s *EtcdServer) Cleanup() {
 	}
 }
 
+// 应用
 func (s *EtcdServer) applyAll(ep *etcdProgress, apply *toApply) {
+	// 应用快照
 	s.applySnapshot(ep, apply)
+	// 应用Entries
 	s.applyEntries(ep, apply)
 
 	proposalsApplied.Set(float64(ep.appliedi))
@@ -942,6 +958,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *toApply) {
 }
 
 func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
+	// 无快照至=直接退出
 	if raft.IsEmptySnap(toApply.snapshot) {
 		return
 	}
@@ -976,7 +993,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 		)
 	}
 
-	// wait for raftNode to persist snapshot onto the disk
+	// 等待raftNode将快照持久化到磁盘
 	<-toApply.notifyc
 
 	newbe, err := serverstorage.OpenSnapshotBackend(s.Cfg, s.snapshotter, toApply.snapshot, s.beHooks)
@@ -2207,6 +2224,7 @@ func (s *EtcdServer) monitorStorageVersion() {
 }
 
 func (s *EtcdServer) monitorKVHash() {
+	// 数据损坏检查间隔
 	t := s.Cfg.CorruptCheckTime
 	if t == 0 {
 		return
@@ -2220,16 +2238,21 @@ func (s *EtcdServer) monitorKVHash() {
 		zap.String("local-member-id", s.MemberId().String()),
 		zap.Duration("interval", t),
 	)
+	//
 	for {
 		select {
 		case <-s.stopping:
+			// 服务器停止
 			lg.Info("server has stopped; stopping kv hash's monitor")
 			return
 		case <-checkTicker.C:
+			// 触发检查
 		}
+		// 如果非leader,直接跳过
 		if !s.isLeader() {
 			continue
 		}
+		// 开启周期检查
 		if err := s.corruptionChecker.PeriodicCheck(); err != nil {
 			lg.Warn("failed to check hash KV", zap.Error(err))
 		}
@@ -2332,6 +2355,7 @@ func (s *EtcdServer) updateClusterVersionV3(ver string) {
 	}
 }
 
+// 当节点为leader时,监听是否降级版本
 // monitorDowngrade every DowngradeCheckTime checks if it's the leader and cancels downgrade if needed.
 func (s *EtcdServer) monitorDowngrade() {
 	monitor := serverversion.NewMonitor(s.Logger(), NewServerVersionAdapter(s))

@@ -780,13 +780,19 @@ func (s *EtcdServer) Watchable() mvcc.WatchableKV { return s.KV() }
 
 func (s *EtcdServer) linearizableReadLoop() {
 	for {
+		// 生成requestID
 		requestId := s.reqIDGen.Next()
+		// 用于通知leader改变的管道
 		leaderChangedNotifier := s.leaderChanged.Receive()
 		select {
 		case <-leaderChangedNotifier:
+			// 丢掉老的读请求
 			continue
 		case <-s.readwaitc:
+			// 读操作会被阻塞在这里
+			// 可用继续读了
 		case <-s.stopping:
+			// 关闭
 			return
 		}
 
@@ -794,12 +800,15 @@ func (s *EtcdServer) linearizableReadLoop() {
 		// to propagate the trace from Txn or Range.
 		trace := traceutil.New("linearizableReadLoop", s.Logger())
 
+		// 用于通知读协程,可以处理请求了
+		// 每次循环都会新创建一个
 		nextnr := newNotifier()
 		s.readMu.Lock()
 		nr := s.readNotifier
 		s.readNotifier = nextnr
 		s.readMu.Unlock()
 
+		// 拿到已commint ID[从leader获取]
 		confirmedIndex, err := s.requestCurrentIndex(leaderChangedNotifier, requestId)
 		if isStopped(err) {
 			return
@@ -813,9 +822,11 @@ func (s *EtcdServer) linearizableReadLoop() {
 
 		trace.AddField(traceutil.Field{Key: "readStateIndex", Value: confirmedIndex})
 
+		// applyID[当前节点]
 		appliedIndex := s.getAppliedIndex()
 		trace.AddField(traceutil.Field{Key: "appliedIndex", Value: strconv.FormatUint(appliedIndex, 10)})
 
+		// 等待当前节点appliedIndex>=confirmedIndex
 		if appliedIndex < confirmedIndex {
 			select {
 			case <-s.applyWait.Wait(confirmedIndex):
@@ -823,6 +834,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 				return
 			}
 		}
+		// 用于通知读协程,可以处理请求了
 		// unblock all l-reads requested at indices before confirmedIndex
 		nr.notify(nil)
 		trace.Step("applied index is now lower than readState.Index")
@@ -836,6 +848,7 @@ func isStopped(err error) bool {
 }
 
 func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, requestId uint64) (uint64, error) {
+	// 调用raftnode的ReadIndex方法,向leader发生MsgReadIndex消息
 	err := s.sendReadIndex(requestId)
 	if err != nil {
 		return 0, err
@@ -852,7 +865,9 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 	for {
 		select {
 		case rs := <-s.r.readStateC:
+			// 得到了响应
 			requestIdBytes := uint64ToBigEndianBytes(requestId)
+			// 判断requestID 是否正确
 			gotOwnResponse := bytes.Equal(rs.RequestCtx, requestIdBytes)
 			if !gotOwnResponse {
 				// a previous request might time out. now we should ignore the response of it and
@@ -869,8 +884,10 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 				slowReadIndex.Inc()
 				continue
 			}
+			// 拿到已commint ID
 			return rs.Index, nil
 		case <-leaderChangedNotifier:
+			// leader发生改变,
 			readIndexFailed.Inc()
 			// return a retryable error.
 			return 0, errors.ErrLeaderChanged
@@ -884,6 +901,7 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 			retryTimer.Reset(readIndexRetryTime)
 			continue
 		case <-retryTimer.C:
+			// 重新发送ReadIndex请求
 			lg.Warn(
 				"waiting for ReadIndex response took too long, retrying",
 				zap.Uint64("sent-request-id", requestId),
@@ -914,6 +932,7 @@ func uint64ToBigEndianBytes(number uint64) []byte {
 	return byteResult
 }
 
+// 调用raftnode的ReadIndex方法,向leader发生MsgReadIndex消息
 func (s *EtcdServer) sendReadIndex(requestIndex uint64) error {
 	ctxToSend := uint64ToBigEndianBytes(requestIndex)
 
@@ -941,13 +960,13 @@ func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
 	nc := s.readNotifier
 	s.readMu.RUnlock()
 
-	// signal linearizable loop for current notify if it hasn't been already
+	// 通知linearizableReadLoop()开始运行
 	select {
 	case s.readwaitc <- struct{}{}:
 	default:
 	}
 
-	// wait for read state notification
+	// 等待readNotifier
 	select {
 	case <-nc.c:
 		return nc.err

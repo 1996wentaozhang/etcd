@@ -27,6 +27,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdmain"
 )
 
+// etcd主函数
 func main() {
 	etcdmain.Main(os.Args)
 }

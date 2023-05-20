@@ -147,7 +147,8 @@ type ServerConfig struct {
 
 	// InitialCorruptCheck is true to check data corruption on boot
 	// before serving any peer/client traffic.
-	InitialCorruptCheck     bool
+	InitialCorruptCheck bool
+	// 数据损坏检查
 	CorruptCheckTime        time.Duration
 	CompactHashCheckEnabled bool
 	CompactHashCheckTime    time.Duration

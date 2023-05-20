@@ -87,7 +87,7 @@ type WAL struct {
 	unsafeNoSync bool // if set, do not fsync
 
 	mu      sync.Mutex
-	enti    uint64   // index of the last entry saved to the wal
+	enti    uint64   // 最后一个保存到wal中的实体的索引
 	encoder *encoder // encoder to encode records
 
 	locks []*fileutil.LockedFile // the locked files the WAL holds (the name is increasing)
@@ -798,16 +798,18 @@ func (w *WAL) cut() error {
 }
 
 func (w *WAL) sync() error {
+	// 将缓冲区中的数据立刻写入文件[将快缓存放到了写队列]
 	if w.encoder != nil {
 		if err := w.encoder.flush(); err != nil {
 			return err
 		}
 	}
-
+	//
 	if w.unsafeNoSync {
 		return nil
 	}
 
+	// fdatasync的功能与fsync类似，但是仅仅在必要的情况下才会同步metadata，因此可以减少一次IO写操作。
 	start := time.Now()
 	err := fileutil.Fdatasync(w.tail().File)
 
@@ -932,14 +934,18 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 		return nil
 	}
 
+	// 判断是否需要同步写到后端存储
 	mustSync := raft.MustSync(st, w.state, len(ents))
 
 	// TODO(xiangli): no more reference operator
 	for i := range ents {
+		// 保存实体
 		if err := w.saveEntry(&ents[i]); err != nil {
 			return err
 		}
 	}
+	// 添加StateType的记录
+	// 更新wal的state字段
 	if err := w.saveState(&st); err != nil {
 		return err
 	}

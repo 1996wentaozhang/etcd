@@ -211,7 +211,11 @@ type Config struct {
 	// MaxConcurrentStreams specifies the maximum number of concurrent
 	// streams that each client can open at a time.
 	MaxConcurrentStreams uint32 `json:"max-concurrent-streams"`
-
+	//
+	// ListenClientUrls:
+	//	1)127.0.0.1:2379
+	//	2)IP:2379
+	//
 	ListenPeerUrls, ListenClientUrls, ListenClientHttpUrls []url.URL
 	AdvertisePeerUrls, AdvertiseClientUrls                 []url.URL
 	ClientTLSInfo                                          transport.TLSInfo

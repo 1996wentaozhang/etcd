@@ -189,6 +189,7 @@ func (f *fifo) run() {
 	}
 }
 
+// 执行任务
 func (f *fifo) executeJob(todo Job, updatedFinishedStats bool) {
 	defer func() {
 		if !updatedFinishedStats {

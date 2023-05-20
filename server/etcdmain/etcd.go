@@ -111,6 +111,7 @@ func startEtcdOrProxyV2(args []string) {
 		)
 		switch which {
 		case dirMember:
+			// 启动ETCD
 			stopped, errc, err = startEtcd(&cfg.ec)
 		case dirProxy:
 			lg.Panic("v2 http proxy has already been deprecated in 3.6", zap.String("dir-type", string(which)))
@@ -121,6 +122,7 @@ func startEtcdOrProxyV2(args []string) {
 			)
 		}
 	} else {
+		// 初次启动
 		lg.Info(
 			"Initialize and start etcd server",
 			zap.String("data-dir", cfg.ec.Dir),
@@ -207,6 +209,7 @@ func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	//
 	osutil.RegisterInterruptHandler(e.Close)
 	select {
 	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
