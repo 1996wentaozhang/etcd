@@ -149,7 +149,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		token   string
 	)
 	memberInitialized := true
-	if !isMemberInitialized(cfg) {
+	if !isMemberInitialized(cfg) { // 如果还没有初始化过,
 		memberInitialized = false
 		urlsmap, token, err = cfg.PeerURLsMapAndToken("etcd")
 		if err != nil {
@@ -169,20 +169,23 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	backendFreelistType := parseBackendFreelistType(cfg.BackendFreelistType)
 
 	srvcfg := config.ServerConfig{
-		Name:                                     cfg.Name,
-		ClientURLs:                               cfg.AdvertiseClientUrls,
-		PeerURLs:                                 cfg.AdvertisePeerUrls,
-		DataDir:                                  cfg.Dir,
-		DedicatedWALDir:                          cfg.WalDir,
-		SnapshotCount:                            cfg.SnapshotCount,
-		SnapshotCatchUpEntries:                   cfg.SnapshotCatchUpEntries,
-		MaxSnapFiles:                             cfg.MaxSnapFiles,
-		MaxWALFiles:                              cfg.MaxWalFiles,
-		InitialPeerURLsMap:                       urlsmap,
-		InitialClusterToken:                      token,
+		Name:       cfg.Name,                // 节点名字
+		ClientURLs: cfg.AdvertiseClientUrls, //
+		PeerURLs:   cfg.AdvertisePeerUrls,   //
+		DataDir:    cfg.Dir,                 // 数据路径
+		// 快照相关
+		SnapshotCount:          cfg.SnapshotCount,
+		SnapshotCatchUpEntries: cfg.SnapshotCatchUpEntries,
+		MaxSnapFiles:           cfg.MaxSnapFiles,
+		// WAL相关
+		DedicatedWALDir: cfg.WalDir, // wal路径
+		MaxWALFiles:     cfg.MaxWalFiles,
+		//
+		InitialPeerURLsMap:                       urlsmap, // 如果已经初始化过了，这里为空 --initial-cluster
+		InitialClusterToken:                      token,   // --initial-cluster-token
 		DiscoveryURL:                             cfg.Durl,
 		DiscoveryProxy:                           cfg.Dproxy,
-		NewCluster:                               cfg.IsNewCluster(),
+		NewCluster:                               cfg.IsNewCluster(), // 集群 新/旧 --initial-cluster-state
 		PeerTLSInfo:                              cfg.PeerTLSInfo,
 		TickMs:                                   cfg.TickMs,
 		ElectionTicks:                            cfg.ElectionTicks(),
@@ -210,7 +213,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		CompactHashCheckTime:                     cfg.ExperimentalCompactHashCheckTime,
 		PreVote:                                  cfg.PreVote,
 		Logger:                                   cfg.logger,
-		ForceNewCluster:                          cfg.ForceNewCluster,
+		ForceNewCluster:                          cfg.ForceNewCluster, // --force-new-cluster
 		EnableGRPCGateway:                        cfg.EnableGRPCGateway,
 		ExperimentalEnableDistributedTracing:     cfg.ExperimentalEnableDistributedTracing,
 		UnsafeNoFsync:                            cfg.UnsafeNoFsync,
@@ -226,6 +229,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		V2Deprecation: cfg.V2DeprecationEffective(),
 	}
 
+	// trace
 	if srvcfg.ExperimentalEnableDistributedTracing {
 		tctx := context.Background()
 		tracingExporter, err := newTracingExporter(tctx, cfg)

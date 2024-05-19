@@ -57,6 +57,8 @@ func startEtcdOrProxyV2(args []string) {
 	defaultInitialCluster := cfg.ec.InitialCluster
 
 	err := cfg.parse(args[1:])
+
+	// logger
 	lg := cfg.ec.GetLogger()
 	// If we failed to parse the whole configuration, print the error using
 	// preferably the resolved logger from the config,
@@ -111,6 +113,7 @@ func startEtcdOrProxyV2(args []string) {
 	var stopped <-chan struct{}
 	var errc <-chan error
 
+	// 检测是否有数据
 	which := identifyDataDirOrDie(cfg.ec.GetLogger(), cfg.ec.Dir)
 	if which != dirEmpty {
 		lg.Info(
@@ -120,6 +123,7 @@ func startEtcdOrProxyV2(args []string) {
 		)
 		switch which {
 		case dirMember:
+			// 启动 etcd
 			stopped, errc, err = startEtcd(&cfg.ec)
 		case dirProxy:
 			err = startProxy(cfg)
@@ -225,6 +229,7 @@ func startEtcdOrProxyV2(args []string) {
 
 // startEtcd runs StartEtcd in addition to hooks needed for standalone etcd.
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
+	// 启动
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
 		return nil, nil, err

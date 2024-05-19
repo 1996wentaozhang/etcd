@@ -36,7 +36,7 @@ func Main(args []string) {
 			return
 		}
 	}
-
+	// 启动
 	startEtcdOrProxyV2(args)
 }
 

@@ -27,6 +27,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdmain"
 )
 
+// 主入口
 func main() {
 	etcdmain.Main(os.Args)
 }
