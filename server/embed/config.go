@@ -137,11 +137,14 @@ func init() {
 }
 
 // Config holds the arguments for configuring an etcd server.
-type Config struct {
+type Config struct
+	// 节点名字
 	Name   string `json:"name"`
+	// ------  [raft日志] -----
+	// 数据存储路径
 	Dir    string `json:"data-dir"`
 	WalDir string `json:"wal-dir"`
-
+	// 多少个提交事务数量 -> 触发快照 (默认:100000)
 	SnapshotCount uint64 `json:"snapshot-count"`
 
 	// SnapshotCatchUpEntries is the number of entries for a slow follower
@@ -156,11 +159,10 @@ type Config struct {
 	MaxSnapFiles uint `json:"max-snapshots"`
 	MaxWalFiles  uint `json:"max-wals"`
 
-	// TickMs is the number of milliseconds between heartbeat ticks.
-	// TODO: decouple tickMs and heartbeat tick (current heartbeat tick = 1).
-	// make ticks a cluster wide configuration.
-	TickMs     uint `json:"heartbeat-interval"`
-	ElectionMs uint `json:"election-timeout"`
+	// 心跳
+	TickMs     uint `json:"heartbeat-interval"` // 100ms
+	// 选举
+	ElectionMs uint `json:"election-timeout"` // 1000ms
 
 	// InitialElectionTickAdvance is true, then local member fast-forwards
 	// election ticks to speed up "initial" leader election trigger. This
@@ -191,12 +193,16 @@ type Config struct {
 	// See https://github.com/etcd-io/etcd/issues/9333 for more detail.
 	InitialElectionTickAdvance bool `json:"initial-election-tick-advance"`
 
+	// ----- 事务(批量执行) -------
 	// BackendBatchInterval is the maximum time before commit the backend transaction.
 	BackendBatchInterval time.Duration `json:"backend-batch-interval"`
 	// BackendBatchLimit is the maximum operations before commit the backend transaction.
 	BackendBatchLimit int `json:"backend-batch-limit"`
+
+
 	// BackendFreelistType specifies the type of freelist that boltdb backend uses (array and map are supported types).
 	BackendFreelistType string `json:"backend-bbolt-freelist-type"`
+
 	QuotaBackendBytes   int64  `json:"quota-backend-bytes"`
 	MaxTxnOps           uint   `json:"max-txn-ops"`
 	MaxRequestBytes     uint   `json:"max-request-bytes"`
@@ -227,10 +233,13 @@ type Config struct {
 	TlsMaxVersion string `json:"tls-max-version"`
 
 	ClusterState          string `json:"initial-cluster-state"`
+
+	//
 	DNSCluster            string `json:"discovery-srv"`
 	DNSClusterServiceName string `json:"discovery-srv-name"`
 	Dproxy                string `json:"discovery-proxy"`
 	Durl                  string `json:"discovery"`
+
 	InitialCluster        string `json:"initial-cluster"`
 	InitialClusterToken   string `json:"initial-cluster-token"`
 	StrictReconfigCheck   bool   `json:"strict-reconfig-check"`
@@ -240,7 +249,9 @@ type Config struct {
 	// Deprecated in 3.5.
 	EnableV2 bool `json:"enable-v2"`
 
-	// AutoCompactionMode is either 'periodic' or 'revision'.
+	// ----- 压缩 (boltDB)
+	// 'periodic':周期性
+	// 'revision':根据版本号
 	AutoCompactionMode string `json:"auto-compaction-mode"`
 	// AutoCompactionRetention is either duration string with time unit
 	// (e.g. '5m' for 5-minute), or revision unit (e.g. '5000').

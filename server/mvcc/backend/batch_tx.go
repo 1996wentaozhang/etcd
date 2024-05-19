@@ -57,6 +57,7 @@ type BatchTx interface {
 	LockOutsideApply()
 }
 
+// 批量事务
 type batchTx struct {
 	sync.Mutex
 	tx      *bolt.Tx
@@ -258,6 +259,7 @@ func (t *batchTx) safePending() int {
 	return t.pending
 }
 
+// 提交
 func (t *batchTx) commit(stop bool) {
 	// commit the last tx
 	if t.tx != nil {

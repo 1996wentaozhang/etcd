@@ -69,6 +69,9 @@ var (
 // A newly created WAL is in append mode, and ready for appending records.
 // A just opened WAL is in read mode, and ready for reading records.
 // The WAL will be ready for appending after reading out all the previous records.
+
+// stable storage的逻辑表示
+// 只能 read mode / append mode 中一种
 type WAL struct {
 	lg *zap.Logger
 
@@ -912,6 +915,9 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 	return w.encoder.encode(rec)
 }
 
+// 保存
+// 1: HardState
+// 2: 需要保存的日志entity
 func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -921,18 +927,21 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 		return nil
 	}
 
+	// 1 和 2 任意有一个变化，都需要sync
 	mustSync := raft.MustSync(st, w.state, len(ents))
 
-	// TODO(xiangli): no more reference operator
+	// 保存实体
 	for i := range ents {
 		if err := w.saveEntry(&ents[i]); err != nil {
 			return err
 		}
 	}
+	// 保存状态
 	if err := w.saveState(&st); err != nil {
 		return err
 	}
 
+	// 是否需要分块了
 	curOff, err := w.tail().Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
@@ -947,6 +956,7 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 		return nil
 	}
 
+	// 执行分块
 	return w.cut()
 }
 

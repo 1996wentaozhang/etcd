@@ -199,6 +199,7 @@ type TokenProvider interface {
 	genTokenPrefix() (string, error)
 }
 
+// 认证
 type authStore struct {
 	// atomic operations; need 64-bit align, or 32-bit tests will crash
 	revision uint64

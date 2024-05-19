@@ -821,6 +821,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 		s.readNotifier = nextnr
 		s.readMu.Unlock()
 
+		// 执行readIndex
 		confirmedIndex, err := s.requestCurrentIndex(leaderChangedNotifier, requestId)
 		if isStopped(err) {
 			return
@@ -834,9 +835,11 @@ func (s *EtcdServer) linearizableReadLoop() {
 
 		trace.AddField(traceutil.Field{Key: "readStateIndex", Value: confirmedIndex})
 
+		// 当前机器已经apply的index
 		appliedIndex := s.getAppliedIndex()
 		trace.AddField(traceutil.Field{Key: "appliedIndex", Value: strconv.FormatUint(appliedIndex, 10)})
 
+		// 等待apply
 		if appliedIndex < confirmedIndex {
 			select {
 			case <-s.applyWait.Wait(confirmedIndex):
@@ -856,12 +859,15 @@ func isStopped(err error) bool {
 	return err == raft.ErrStopped || err == ErrStopped
 }
 
+// 请求当前集群的 提交索引 (read index)
 func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, requestId uint64) (uint64, error) {
+	// 发送请求
 	err := s.sendReadIndex(requestId)
 	if err != nil {
 		return 0, err
 	}
 
+	//
 	lg := s.Logger()
 	errorTimer := time.NewTimer(s.Cfg.ReqTimeout())
 	defer errorTimer.Stop()
@@ -873,7 +879,9 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 	for {
 		select {
 		case rs := <-s.r.readStateC:
+			// 读取 readidex 的响应
 			requestIdBytes := uint64ToBigEndianBytes(requestId)
+			// 根据requestID判断是不是需要的响应
 			gotOwnResponse := bytes.Equal(rs.RequestCtx, requestIdBytes)
 			if !gotOwnResponse {
 				// a previous request might time out. now we should ignore the response of it and
@@ -896,6 +904,7 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 			// return a retryable error.
 			return 0, ErrLeaderChanged
 		case <-firstCommitInTermNotifier:
+			// 当前term完成了第一个commit
 			firstCommitInTermNotifier = s.FirstCommitInTermNotify()
 			lg.Info("first commit in current term: resending ReadIndex request")
 			err := s.sendReadIndex(requestId)
@@ -905,6 +914,7 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 			retryTimer.Reset(readIndexRetryTime)
 			continue
 		case <-retryTimer.C:
+			// 等待响应超时 -> 重新发送请求
 			lg.Warn(
 				"waiting for ReadIndex response took too long, retrying",
 				zap.Uint64("sent-request-id", requestId),
@@ -917,6 +927,7 @@ func (s *EtcdServer) requestCurrentIndex(leaderChangedNotifier <-chan struct{}, 
 			retryTimer.Reset(readIndexRetryTime)
 			continue
 		case <-errorTimer.C:
+			// 彻底超时 -> 返回
 			lg.Warn(
 				"timed out waiting for read index response (local node might have slow network)",
 				zap.Duration("timeout", s.Cfg.ReqTimeout()),
